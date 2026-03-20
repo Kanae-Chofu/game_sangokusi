@@ -2,13 +2,13 @@ import pygame
 import math
 import random
 
-# --- 基本設定 (変更なし) ---
+# --- 基本設定 ---
 SCREEN_WIDTH, SCREEN_HEIGHT = 800, 1000
 FPS = 60
 HEX_RADIUS = 20
 GRID_COLS, GRID_ROWS = 20, 24
 
-# 色設定 (変更なし)
+# 色設定
 COLORS = {
     "司": (160, 185, 220), "豫": (215, 200, 225), "冀": (255, 245, 140),
     "兗": (235, 175, 140), "徐": (215, 235, 210), "青": (190, 210, 235),
@@ -64,7 +64,7 @@ RAW_LAYOUT = [
     "・益益益益交交交交交交交交交交交海海海海", "・・・・・・・・交交交交海海海海海海海海"
 ]
 
-# --- グローバル ---
+# --- グローバル変数 ---
 hex_map = {}
 diplomacy = {f: "なし" for f in FORCE_COLORS}
 selected_hex = None
@@ -73,6 +73,7 @@ game_year = 191
 game_month = 11
 player_gold = 3000
 player_rice = 30000
+player_soldier = 5000  # プレイヤー兵士数
 last_event_msg = "なし"
 game_active = True
 extinction_msg = ""
@@ -127,18 +128,24 @@ def setup_map_data():
         }
 
 def main():
-    global selected_hex, show_ranking, game_year, game_month, player_gold, player_rice, last_event_msg, game_active, extinction_msg, extinction_timer, flash_timer, action_done
+    global selected_hex, show_ranking, game_year, game_month, player_gold, player_rice, player_soldier
+    global last_event_msg, game_active, extinction_msg, extinction_timer, flash_timer, action_done
+    
     pygame.init()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("三國志：袁譚立志伝 - 電撃戦版")
+    pygame.display.set_caption("三國志：袁譚立志伝 - 電撃戦・兵士概念版")
     clock = pygame.time.Clock()
     
-    font = pygame.font.SysFont("msmincho", 14)
-    ui_font = pygame.font.SysFont("msmincho", 18)
-    title_font = pygame.font.SysFont("msmincho", 22, bold=True)
-    rank_font = pygame.font.SysFont("msmincho", 20)
-    info_font = pygame.font.SysFont("msmincho", 24, bold=True)
-    big_font = pygame.font.SysFont("msmincho", 60, bold=True)
+    # フォント設定（互換性のため標準フォント優先）
+    def get_font(size, bold=False):
+        return pygame.font.SysFont(["msmincho", "msgothic", "hiraginosans", "sans"], size, bold=bold)
+
+    font = get_font(14)
+    ui_font = get_font(18)
+    title_font = get_font(22, True)
+    rank_font = get_font(20)
+    info_font = get_font(24, True)
+    big_font = get_font(60, True)
 
     setup_map_data()
     player_force = "袁譚"
@@ -155,6 +162,7 @@ def main():
             if event.type == pygame.QUIT: pygame.quit(); return
             
             if event.type == pygame.KEYDOWN and game_active:
+                # K: 開発
                 if event.key == pygame.K_k:
                     if action_done: last_event_msg = "今月は行動済みです"
                     elif selected_hex and hex_map[selected_hex]["owner"] == player_force:
@@ -162,10 +170,23 @@ def main():
                         if d["dev_level"] < 1.0:
                             if player_gold >= 400:
                                 player_gold -= 400
-                                d["dev_level"] = min(1.0, d["dev_level"] + 0.05)
-                                last_event_msg = f"開発：{int(d['dev_level']*100)}%"
+                                d["dev_level"] = min(1.0, d["dev_level"] + 0.08)
+                                last_event_msg = f"開発実施：{int(d['dev_level']*100)}%"
                                 action_done = True
                             else: last_event_msg = "金が足りません"
+                
+                # B: 徴兵
+                if event.key == pygame.K_b:
+                    if action_done: last_event_msg = "今月は行動済みです"
+                    elif player_gold >= 500 and player_rice >= 2000:
+                        player_gold -= 500
+                        player_rice -= 2000
+                        player_soldier += 1200
+                        last_event_msg = "徴兵：兵士+1200 (金-500 糧-2000)"
+                        action_done = True
+                    else: last_event_msg = "金または糧が足りません"
+
+                # G: 外交
                 if event.key == pygame.K_g:
                     if action_done: last_event_msg = "今月は行動済みです"
                     elif selected_hex:
@@ -175,60 +196,55 @@ def main():
                                 player_gold -= 1000
                                 action_done = True
                                 r = random.random()
-                                if r < 0.4: diplomacy[target] = "同盟"; last_event_msg = f"{target}と同盟！"
-                                elif r < 0.7: diplomacy[target] = "臣従"; last_event_msg = f"{target}に臣従"
-                                else: diplomacy[target] = "敵対"; last_event_msg = f"{target}と決裂"
+                                if r < 0.4: diplomacy[target] = "同盟"; last_event_msg = f"{target}と同盟締結！"
+                                elif r < 0.7: diplomacy[target] = "臣従"; last_event_msg = f"{target}が臣従を要求"
+                                else: diplomacy[target] = "敵対"; last_event_msg = f"{target}と外交決裂"
 
             if event.type == pygame.MOUSEBUTTONDOWN and game_active:
                 if not show_ranking:
                     if btn_rank_rect.collidepoint(mouse_pos): show_ranking = True
                     elif btn_next_rect.collidepoint(mouse_pos):
+                        # --- 次月進行ロジック ---
                         game_month += 1
                         if game_month > 12: game_month = 1; game_year += 1
                         action_done = False
+                        
                         my_lands = [d for d in hex_map.values() if d["owner"] == player_force]
                         if not my_lands: game_active = False; continue
+                        
                         total_houses = sum(int(d["peak_house"] * d["dev_level"]) for d in my_lands)
-                        tribute = sum(500 for f, rel in diplomacy.items() if rel == "臣従")
-                        player_gold += (total_houses // 150) - tribute
-                        if game_month in [5, 6, 10]: player_rice += total_houses // 2
-                        else: player_rice -= total_houses // 40
+                        # 収入計算
+                        player_gold += (total_houses // 120)
+                        if game_month in [6, 10]: # 収穫期
+                            player_rice += total_houses // 2
+                        
+                        # 維持費（兵士数に応じて糧を消費）
+                        player_rice -= (player_soldier // 10)
+                        if player_rice < 0:
+                            player_rice = 0
+                            player_soldier = max(0, player_soldier - 500)
+                            last_event_msg = "兵糧不足で脱走兵が発生！"
 
-                        # --- AIの行動思考アップデート ---
+                        # AIの行動
                         for f_name in FORCE_COLORS.keys():
                             if f_name in [player_force, "未所属"]: continue
                             f_hexes = [c for c, d in hex_map.items() if d["owner"] == f_name]
                             if not f_hexes: continue
                             
-                            atk_p = 0.20 # 基本攻撃率を少しアップ
+                            atk_p = 0.25
                             if diplomacy.get(f_name) in ["同盟", "臣従"]: atk_p = 0
-                            elif diplomacy.get(f_name) == "敵対": atk_p = 0.50 # 敵対時は猛攻
-
                             if random.random() < atk_p:
-                                # 攻撃可能マス（隣接する他勢力マス）をリストアップ
                                 pot = [n for l_c in f_hexes for n in get_neighbors(l_c[0], l_c[1]) if n in hex_map and hex_map[n]["is_land"] and hex_map[n]["owner"] != f_name]
                                 if pot:
-                                    # 【新ロジック】攻撃対象の中に「城」があれば、確実にそこを狙う
-                                    target_coord = None
-                                    castles_in_range = [c for c in pot if hex_map[c]["castle"]]
-                                    if castles_in_range:
-                                        target_coord = random.choice(castles_in_range)
-                                    else:
-                                        target_coord = random.choice(pot)
-                                    
+                                    target_coord = random.choice(pot)
                                     target_hex = hex_map[target_coord]
                                     if target_hex["castle"] and target_hex["owner"] != "未所属":
-                                        # 城陥落
                                         old_owner = target_hex["owner"]
                                         for c in hex_map:
                                             if hex_map[c]["owner"] == old_owner: hex_map[c]["owner"] = f_name
-                                        if old_owner == player_force: last_event_msg = f"警告！本拠地が{f_name}に奪われました！"
+                                        if old_owner == player_force: last_event_msg = f"警報！{f_name}に本拠地を奪われました！"
                                     else:
                                         target_hex["owner"] = f_name
-                            else:
-                                # 内政
-                                dev_hex = random.choice(f_hexes)
-                                hex_map[dev_hex]["dev_level"] = min(1.0, hex_map[dev_hex]["dev_level"] + 0.03)
                         
                         alive_now = set(d["owner"] for d in hex_map.values() if d["owner"] != "未所属")
                         dead = alive_forces_before - alive_now
@@ -237,33 +253,39 @@ def main():
                         clicked = get_hex_under_mouse(mouse_pos)
                         if clicked:
                             selected_hex = clicked
+                            # 右クリック：出陣・占領
                             if event.button == 3:
                                 if action_done: last_event_msg = "今月は行動済みです"
                                 else:
                                     d = hex_map[clicked]
                                     if d["is_land"] and d["owner"] != player_force:
                                         if any(hex_map.get(n, {}).get("owner") == player_force for n in get_neighbors(clicked[0], clicked[1])):
-                                            old_owner = d["owner"]
-                                            if d["castle"] and old_owner != "未所属":
-                                                count = 0
-                                                for c in hex_map:
-                                                    if hex_map[c]["owner"] == old_owner:
-                                                        hex_map[c]["owner"] = player_force
-                                                        count += 1
-                                                last_event_msg = f"【{old_owner}軍】滅亡！全{count}マス接収"
-                                                flash_timer = 20
-                                            else:
-                                                d["owner"] = player_force
-                                                if old_owner != "未所属": diplomacy[old_owner] = "敵対"
-                                                last_event_msg = "占領成功"
-                                            action_done = True
+                                            # 出陣コスト：兵士1000以上必要
+                                            if player_soldier >= 1000:
+                                                old_owner = d["owner"]
+                                                player_soldier -= 800 # 戦闘・遠征消耗
+                                                if d["castle"] and old_owner != "未所属":
+                                                    count = 0
+                                                    for c in hex_map:
+                                                        if hex_map[c]["owner"] == old_owner:
+                                                            hex_map[c]["owner"] = player_force
+                                                            count += 1
+                                                    last_event_msg = f"【{old_owner}軍】滅亡！全{count}マス接収"
+                                                    flash_timer = 20
+                                                else:
+                                                    d["owner"] = player_force
+                                                    if old_owner != "未所属": diplomacy[old_owner] = "敵対"
+                                                    last_event_msg = "占領成功 (兵士-800)"
+                                                action_done = True
+                                            else: last_event_msg = "兵士不足(最低1000必要)"
                                         else: last_event_msg = "隣接領土が必要です"
                 else:
                     if pygame.Rect(300, 850, 200, 50).collidepoint(mouse_pos): show_ranking = False
 
-        # --- 描画 (変更なし) ---
+        # --- 描画 ---
         screen.fill(COLORS["N"])
         if not show_ranking:
+            # マップ描画
             for coord, data in hex_map.items():
                 cx, cy = data["center"]
                 pts = [(cx + HEX_RADIUS * math.cos(math.radians(60*i-30)), cy + HEX_RADIUS * math.sin(math.radians(60*i-30))) for i in range(6)]
@@ -278,11 +300,14 @@ def main():
                 if selected_hex == coord:
                     pygame.draw.polygon(screen, (255, 255, 255), pts, 3)
 
+            # ステータスバー
             pygame.draw.rect(screen, (20,20,20), (0,0,800,60))
-            screen.blit(info_font.render(f"{game_year}年 {game_month}月  金:{player_gold:,}  糧:{player_rice:,}", True, (255,255,255)), (20, 15))
+            info_txt = f"{game_year}年 {game_month}月  金:{player_gold:,}  糧:{player_rice:,}  兵:{player_soldier:,}"
+            screen.blit(info_font.render(info_txt, True, (255,255,255)), (20, 15))
             status_c = (150,150,150) if action_done else (100,255,100)
-            screen.blit(ui_font.render(f"【{'行動済' if action_done else '行動可'}】 報告: {last_event_msg}", True, status_c), (380, 20))
+            screen.blit(ui_font.render(f"【{'済' if action_done else '可'}】 報告: {last_event_msg}", True, status_c), (480, 20))
 
+            # 情報パネル
             pygame.draw.rect(screen, (0,0,0,220), (30, 720, 340, 250), border_radius=15)
             pygame.draw.rect(screen, (100,100,100), (30, 720, 340, 250), 2, border_radius=15)
             if selected_hex:
@@ -290,17 +315,18 @@ def main():
                 if d["is_land"]:
                     screen.blit(title_font.render(f"【{d['castle'] or d['province']+'州'}】", True, (255, 215, 0)), (50, 735))
                     rel = diplomacy.get(d["owner"], "なし")
-                    screen.blit(ui_font.render(f"支配勢力: {d['owner']} (関係:{rel})", True, (255,255,255)), (50, 770))
-                    screen.blit(ui_font.render(f"推定人口: {int(d['peak_house'] * d['dev_level'] * 5):,}人", True, (200,200,200)), (50, 795))
-                    screen.blit(ui_font.render(f"復興度: {int(d['dev_level']*100)}%", True, (255,255,255)), (50, 820))
-                    pygame.draw.rect(screen, (50,50,50), (150, 825, 150, 10))
-                    pygame.draw.rect(screen, (0,255,0), (150, 825, 150 * d["dev_level"], 10))
-                    screen.blit(ui_font.render("K:開発(400) / 右クリック:占領", True, (150,255,150)), (50, 860))
-                    screen.blit(ui_font.render("G:外交(1000) 交渉により関係変化", True, (150,255,255)), (50, 890))
-                    if d["castle"]: screen.blit(ui_font.render("★本拠地: 落とせば勢力を滅亡させます", True, (255,100,100)), (50, 925))
+                    screen.blit(ui_font.render(f"支配勢力: {d['owner']} ({rel})", True, (255,255,255)), (50, 770))
+                    screen.blit(ui_font.render(f"復興度: {int(d['dev_level']*100)}%", True, (255,255,255)), (50, 795))
+                    pygame.draw.rect(screen, (0,255,0), (150, 800, 150 * d["dev_level"], 8))
+                    
+                    screen.blit(ui_font.render("B:徴兵(金500 糧2000) 兵+1200", True, (150,255,150)), (50, 830))
+                    screen.blit(ui_font.render("K:開発(金400) 復興度UP", True, (150,255,150)), (50, 860))
+                    screen.blit(ui_font.render("G:外交(金1000) 関係改善試行", True, (150,255,255)), (50, 890))
+                    screen.blit(ui_font.render("右クリック:占領(兵1000/消費800)", True, (255,150,150)), (50, 920))
             else:
                 screen.blit(ui_font.render("土地を選択してください", True, (150,150,150)), (80, 820))
 
+            # ボタン
             pygame.draw.rect(screen, (20, 60, 20), btn_next_rect, border_radius=15)
             for i, char in enumerate("次月進行"): screen.blit(ui_font.render(char, True, (255,255,255)), (btn_next_rect.centerx - 10, btn_next_rect.y + 40 + i*25))
             pygame.draw.rect(screen, (40, 40, 40), btn_rank_rect, border_radius=15)
@@ -315,6 +341,7 @@ def main():
                 s = pygame.Surface((800,1000), pygame.SRCALPHA); s.fill((0,0,0,200)); screen.blit(s,(0,0))
                 screen.blit(info_font.render("GAME OVER", True, (255,0,0)), (350, 450))
         else:
+            # ランキング表示
             stats = {}
             for d in hex_map.values():
                 if d["owner"] != "未所属":
